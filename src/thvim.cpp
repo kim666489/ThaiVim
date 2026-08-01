@@ -47,6 +47,7 @@ queue<QueueOtherNode> OtherQueue;
 mutex QueueMutex; // Prevent race conditions when accessing MainQueue from multiple threads
 
 fs::path MotherPath;
+fs::path StartCwd; // ไดเรกทอรีที่ user อยู่ตอนสั่งรัน thaivim (ก่อนโปรแกรมจะแตะ path ใดๆ)
 int max_x,max_y;
 WINDOW* FileManagerWindow;
 WINDOW* TextEditorWindow;
@@ -1335,7 +1336,7 @@ void FileManager_thread() {
 void main_thread() {
     SetupTerminal();
     RegisterCommands();
-    CurrentDir = MotherPath;
+    CurrentDir = StartCwd; // ล็อก File Manager ให้เปิดที่ path ปัจจุบันซึ่ง user รันคำสั่ง thaivim อยู่ (ไม่ใช่ path ของตัวโปรแกรม)
     RefreshFileManager();
 
     string statusMsg = "Welcome to ThaiVim! Use :help for commands, Tab to switch panels";
@@ -1362,6 +1363,17 @@ void main_thread() {
 
 int main(int argc,char* args[]) {
     setlocale(LC_ALL, ""); // จำเป็นมากสำหรับให้ ncursesw แสดงผลภาษาไทย (UTF-8) ได้ถูกต้อง
+
+    // เก็บ path ปัจจุบันที่ user อยู่ตอนสั่งรัน thaivim ไว้ก่อน (ต้องทำเป็นอันดับแรกสุด
+    // ก่อนโค้ดส่วนอื่นจะไปยุ่งกับ filesystem) เพื่อให้ File Manager ล็อกไปเปิดที่ path นี้
+    // แทนที่จะเปิดตามตำแหน่งไฟล์ executable เหมือนเดิม (MotherPath ยังคงไว้ใช้หา
+    // syntax/, themes/ และไฟล์ session ที่อยู่คู่กับตัวโปรแกรมเท่านั้น)
+    try {
+        StartCwd = fs::current_path();
+    } catch (...) {
+        StartCwd = fs::path("."); // เผื่อ getcwd ล้มเหลว (เช่นโฟลเดอร์ถูกลบระหว่างรันอยู่)
+    }
+
     MotherPath = fs::absolute(fs::canonical(args[0])).parent_path().parent_path();
 
     thread MainThread(main_thread);

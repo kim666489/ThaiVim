@@ -1,7 +1,8 @@
 {
-  "cursor_col": 1,
-  "cursor_line": 6,
+  "cursor_col": 29,
+  "cursor_line": 5,
   "last_file": "/home/kim/Documents/Project/part1/ThaiVim/.thaivim_session.json",
+  "show_cursor_line": false,
   "show_line_numbers": false,
   "theme": "dark"
 }
