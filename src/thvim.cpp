@@ -41,26 +41,24 @@ struct QueueOtherNode {
 
 queue<QueueNode> MainQueue;
 queue<QueueNode> MainThreadQueue;
-queue<QueueNode> FileManagerQueue; // Reserved for future async tasks (e.g. scanning large directories)
-queue<QueueNode> TextEditorQueue;  // Reserved for future async tasks (e.g. auto-save)
+queue<QueueNode> FileManagerQueue; 
+queue<QueueNode> TextEditorQueue;  
 queue<QueueOtherNode> OtherQueue;
-mutex QueueMutex; // Prevent race conditions when accessing MainQueue from multiple threads
+mutex QueueMutex; 
 
 fs::path MotherPath;
-fs::path StartCwd; // ไดเรกทอรีที่ user อยู่ตอนสั่งรัน thaivim (ก่อนโปรแกรมจะแตะ path ใดๆ)
+fs::path StartCwd; 
 int max_x,max_y;
 WINDOW* FileManagerWindow;
 WINDOW* TextEditorWindow;
-WINDOW* ShellWindow;     // Keep original name from prototype (title 'Shell'), now a real terminal panel
+WINDOW* ShellWindow;     
 WINDOW* LeftBar;
-WINDOW* StatusBarWindow; // Single-line status bar at the bottom of the screen (new)
+WINDOW* StatusBarWindow; 
 
 void WriteTUI();
 
 // ============================================================
-//  UTF-8 helpers (จำเป็นสำหรับข้อความภาษาไทยที่ 1 ตัวอักษร = 2-3 byte)
-//  หมายเหตุ: เวอร์ชันนี้ยังไม่คำนวณ "ความกว้างจอ" ของสระ/วรรณยุกต์แบบ
-//  zero-width อย่างสมบูรณ์ (สระ/วรรณยุกต์ลอยจะถูกนับเป็น 1 ช่องเหมือนตัวอักษรทั่วไป)
+//  UTF-8 helpers
 // ============================================================
 vector<string> Utf8Split(const string& s) {
     vector<string> result;
@@ -72,14 +70,13 @@ vector<string> Utf8Split(const string& s) {
         else if ((c & 0xE0) == 0xC0) len = 2;
         else if ((c & 0xF0) == 0xE0) len = 3;
         else if ((c & 0xF8) == 0xF0) len = 4;
-        if (i + len > s.size()) len = 1; // กันข้อมูลเพี้ยน
+        if (i + len > s.size()) len = 1; 
         result.push_back(s.substr(i, len));
         i += len;
     }
     return result;
 }
 
-// อ่านตัวอักษร UTF-8 หนึ่งตัวจาก input ของ ncurses โดยเริ่มจาก byte แรกที่รับมาแล้ว
 string ReadUtf8Char(int firstByte) {
     unsigned char c = (unsigned char)firstByte;
     int len = 1;
@@ -97,7 +94,7 @@ string ReadUtf8Char(int firstByte) {
 }
 
 // ============================================================
-//  Editor / UI state
+//  Editor / UI state & Undo System
 // ============================================================
 enum class EditorMode { NORMAL, INSERT, COMMAND };
 enum class FocusPanel { EDITOR, FILEMANAGER, TERMINAL };
@@ -108,20 +105,28 @@ struct EditorBuffer {
     bool hasFile = false;
     bool modified = false;
     int cursorLine = 0;
-    int cursorCol = 0;   // index เป็น "ตัวอักษร utf8" ไม่ใช่ byte
-    int topLine = 0;     // สำหรับ scroll
+    int cursorCol = 0;   
+    int topLine = 0;     
     vector<string> clipboard;
 };
+
+// --- Undo System ---
+struct EditorSnapshot {
+    vector<string> lines;
+    int cursorLine;
+    int cursorCol;
+};
+vector<EditorSnapshot> UndoHistory;
 
 EditorBuffer CurBuf;
 EditorMode CurMode = EditorMode::NORMAL;
 FocusPanel CurFocus = FocusPanel::EDITOR;
-char PendingKey = 0; // สำหรับคำสั่งสองปุ่ม เช่น dd, yy, gg
+char PendingKey = 0; 
 string CmdLineInput = "";
-bool ShowLineNumbers = false; // :set number / :set nonumber
-bool ShowCursorLine = false;  // :set cursorline / :set nocursorline
+bool ShowLineNumbers = false; 
+bool ShowCursorLine = false;  
 
-vector<string> CmdHistory;   // ประวัติคำสั่งโหมด ':'
+vector<string> CmdHistory;   
 int CmdHistoryPos = -1;
 
 struct FileEntry { string name; bool isDir; };
@@ -129,8 +134,8 @@ fs::path CurrentDir;
 vector<FileEntry> FMEntries;
 int FMSelected = 0;
 int FMTop = 0;
+fs::file_time_type LastFMWriteTime; // ไว้เช็คไฟล์อัปเดต
 
-// ---- Terminal panel state ----
 struct TerminalState {
     vector<string> outputLines = {
         "ThaiVim Terminal - Type a shell command and press Enter",
@@ -143,52 +148,47 @@ struct TerminalState {
     bool running = false;
 };
 TerminalState Term;
-mutex TermMutex; // ป้องกัน outputLines ถูกเข้าถึงพร้อมกันจาก background thread กับ UI thread
+mutex TermMutex; 
 
 // ============================================================
-//  Syntax highlighting (โหลดจากไฟล์ .json ใน folder syntax/)
-//
-//  syntax/config.json   -> map นามสกุลไฟล์ -> ชื่อไฟล์นิยาม syntax (เช่น "cpp")
-//  syntax/<name>.json   -> นิยาม keyword / type / comment / string ของภาษานั้น
-//
-//  เพิ่มภาษาใหม่ทำได้โดยเพิ่มไฟล์ .json ใหม่ใน syntax/ แล้วเติม mapping ใน
-//  config.json เท่านั้น ไม่ต้อง compile โปรแกรมใหม่ (ดูรายละเอียดใน README)
-//
-//  Performance: การ highlight ถูก cache ต่อบรรทัด (HLCache) โดย hash เนื้อหา
-//  บรรทัดไว้เทียบ ถ้าบรรทัดไหนไม่เปลี่ยนและ "สถานะเข้า" (เช่น อยู่ใน /* ... */
-//  ต่อจากบรรทัดก่อนหรือเปล่า) ก็ยังเหมือนเดิม จะข้ามการคำนวณซ้ำทันที (O(1))
-//  ทำให้ไฟล์ใหญ่เลื่อนดู/แก้ไขได้โดยไม่มีการ re-parse ทั้งไฟล์ทุกเฟรม
-//  แก้ไขบรรทัดไหน จะ mismatch แค่บรรทัดนั้น (และบรรทัดถัดไปถ้าสถานะเปลี่ยนจริง)
+//  Save Undo State
+// ============================================================
+void SaveUndo() {
+    if (UndoHistory.size() > 50) UndoHistory.erase(UndoHistory.begin());
+    UndoHistory.push_back({CurBuf.lines, CurBuf.cursorLine, CurBuf.cursorCol});
+}
+
+// ============================================================
+//  Syntax highlighting
 // ============================================================
 enum HRole { HR_NONE = 0, HR_KEYWORD, HR_TYPE, HR_STRING, HR_COMMENT, HR_NUMBER, HR_PREPROC, HR_COUNT };
 
-struct HighlightSpan { int start; int length; int role; }; // start/length เป็น byte offset ของบรรทัด
+struct HighlightSpan { int start; int length; int role; }; 
 
 struct SyntaxDef {
     string name;
     string lineComment;
     string blockStart, blockEnd;
-    vector<string> stringDelims; // แต่ละตัวควรยาว 1 ตัวอักษร เช่น "\"" หรือ "'"
-    bool preprocessor = false;   // true = บรรทัดที่ (หลัง trim ช่องว่าง) ขึ้นต้นด้วย # จะได้สี preprocessor ทั้งบรรทัด
+    vector<string> stringDelims; 
+    bool preprocessor = false;   
     bool numbers = true;
     set<string> keywords;
     set<string> types;
 };
 
-map<string, SyntaxDef> SyntaxDefs;   // key = ชื่อ syntax เช่น "cpp", "python"
-map<string, string> ExtToSyntax;     // key = นามสกุลไฟล์ (มีจุดนำหน้า, ตัวพิมพ์เล็ก) -> ชื่อ syntax
-string CurrentSyntaxName = "";       // syntax ของไฟล์ที่เปิดอยู่ตอนนี้ ("" = ปิด highlight)
+map<string, SyntaxDef> SyntaxDefs;   
+map<string, string> ExtToSyntax;     
+string CurrentSyntaxName = "";       
 
 struct LineHLCache {
     size_t hash = 0;
     bool valid = false;
-    bool startState = false; // อยู่ใน block comment ตอนเข้าบรรทัดนี้หรือไม่
-    bool endState = false;   // อยู่ใน block comment ตอนออกจากบรรทัดนี้หรือไม่ (ส่งต่อบรรทัดถัดไป)
+    bool startState = false; 
+    bool endState = false;   
     vector<HighlightSpan> spans;
 };
-vector<LineHLCache> HLCache; // ขนานกับ CurBuf.lines
+vector<LineHLCache> HLCache; 
 
-// ---- Theme (light / dark / custom) ----
 struct Theme { string name = "dark"; map<string, string> colors; };
 Theme CurTheme;
 
@@ -242,7 +242,7 @@ void LoadSyntaxDefs() {
             }
         }
     } catch (...) {
-        return; // config.json เสีย/parse ไม่ได้ -> ไม่ highlight อะไรเลย แต่โปรแกรมยังรันได้ปกติ
+        return; 
     }
 
     set<string> names;
@@ -269,12 +269,10 @@ void LoadSyntaxDefs() {
                 for (auto& s : j["types"]) def.types.insert(s.get<string>());
             SyntaxDefs[name] = def;
         } catch (...) {
-            // ไฟล์ json ของภาษานี้เสีย -> ข้าม ไม่ให้ทั้งโปรแกรมพังเพราะภาษาเดียว
         }
     }
 }
 
-// หา syntax name จากนามสกุลไฟล์ (คืนค่า "" ถ้าไม่รู้จัก -> ไม่ highlight ไฟล์นี้)
 string DetermineSyntaxForFile(const fs::path& path) {
     string ext = path.extension().string();
     for (auto& c : ext) c = (char)tolower((unsigned char)c);
@@ -288,8 +286,6 @@ bool StartsWithAt(const string& s, size_t pos, const string& pat) {
     return s.compare(pos, pat.size(), pat) == 0;
 }
 
-// สแกนบรรทัดเดียว (byte-based) -> highlight spans ตาม syntax def ที่กำหนด
-// startInBlockComment = เข้ามาตอนที่ยังอยู่ใน /* ... */ ที่ยังไม่ปิดจากบรรทัดก่อนหรือไม่
 vector<HighlightSpan> ComputeSpans(const string& line, const SyntaxDef& def,
                                     bool startInBlockComment, bool& outEndInBlockComment) {
     vector<HighlightSpan> spans;
@@ -376,8 +372,6 @@ vector<HighlightSpan> ComputeSpans(const string& line, const SyntaxDef& def,
     return spans;
 }
 
-// ทำให้ HLCache[0..uptoLine] ใช้งานได้ (ถูกต้อง+ไม่เก่า) โดย recompute เฉพาะบรรทัด
-// ที่ hash เปลี่ยนไปจริงๆ (บรรทัดที่เนื้อหา+สถานะเข้าเหมือนเดิม จะ "reuse" ทันที O(1))
 void EnsureHighlightValid(int uptoLine) {
     if (CurrentSyntaxName.empty() || !SyntaxDefs.count(CurrentSyntaxName)) return;
     if ((int)HLCache.size() != (int)CurBuf.lines.size()) HLCache.resize(CurBuf.lines.size());
@@ -388,7 +382,7 @@ void EnsureHighlightValid(int uptoLine) {
         auto& c = HLCache[i];
         size_t h = hash<string>{}(CurBuf.lines[i]);
         if (c.valid && c.hash == h && c.startState == state) {
-            state = c.endState; // ไม่เปลี่ยน -> ข้ามการคำนวณซ้ำ
+            state = c.endState; 
             continue;
         }
         c.hash = h;
@@ -399,8 +393,6 @@ void EnsureHighlightValid(int uptoLine) {
     }
 }
 
-// วาดบรรทัดพร้อมสีตาม spans ที่คำนวณไว้ จำกัดความกว้างเป็นจำนวน "ตัวอักษร utf8" (ไม่ใช่ byte)
-// extraAttr = ใส่ attribute เพิ่ม (เช่น A_REVERSE สำหรับ cursorline) ทับทุก segment โดยไม่ทำลายสี syntax เดิม
 void DrawHighlightedLine(WINDOW* win, int row, int col, const string& line, int maxChars,
                           const vector<HighlightSpan>& spans, int extraAttr = 0) {
     if (maxChars <= 0) return;
@@ -439,7 +431,6 @@ void DrawHighlightedLine(WINDOW* win, int row, int col, const string& line, int 
     }
 }
 
-// อัปเดต init_pair ของทุก role ตาม theme ที่กำหนด (pair 20+role = สี syntax, pair 30 = พื้นหลัง/ตัวอักษรปกติ)
 void ApplyTheme(const Theme& t) {
     int bg = ResolveColorName(t.colors.count("background") ? t.colors.at("background") : "", COLOR_BLACK);
     int fg = ResolveColorName(t.colors.count("foreground") ? t.colors.at("foreground") : "", COLOR_WHITE);
@@ -455,9 +446,6 @@ void ApplyTheme(const Theme& t) {
     init_pair(20 + HR_PREPROC,    get("preprocessor", COLOR_YELLOW), bg);
 }
 
-// ตั้งพื้นหลังของทุก panel ให้ตรง theme (เรียกใหม่หลัง WriteTUI สร้าง window ใหม่ หรือเปลี่ยน theme)
-// ใช้ wbkgd ผูกกับหมายเลข color pair (ไม่ใช่ค่าสีตรงๆ) ดังนั้นถ้า init_pair(30,...) เปลี่ยนภายหลัง
-// หน้าต่างเดิมจะแสดงสีใหม่ทันทีในรอบ werase/refresh ถัดไปโดยไม่ต้องสร้างหน้าต่างใหม่
 void ApplyThemeToWindows() {
     WINDOW* wins[] = { LeftBar, FileManagerWindow, TextEditorWindow, ShellWindow, StatusBarWindow };
     for (auto* w : wins) {
@@ -466,7 +454,6 @@ void ApplyThemeToWindows() {
     }
 }
 
-// โหลด theme จาก themes/<name>.json แล้ว apply ทันที ("dark" / "light" / "custom" หรือ theme ที่ผู้ใช้เพิ่มเอง)
 bool LoadAndApplyTheme(const string& name) {
     fs::path p = MotherPath / "themes" / (name + ".json");
     if (!fs::exists(p)) return false;
@@ -488,26 +475,25 @@ bool LoadAndApplyTheme(const string& name) {
 }
 
 // ============================================================
-//  Setup / layout (รองรับ real-time resize)
+//  Setup / layout
 // ============================================================
 void SetupTerminal() {
     initscr();
     start_color();
-    cbreak();
+    raw(); // เปลี่ยนเป็น raw() เพื่อจับสัญญาณ Ctrl+C, Ctrl+S, Ctrl+Q ได้โดยตรง
     noecho();
     keypad(stdscr, TRUE);
     curs_set(1);
-    timeout(50); // getch() ไม่ block เกิน 50ms -> ทำให้ terminal output/resize อัปเดตแบบ real-time ได้แม้ไม่มีการกดปุ่ม
+    timeout(50); 
 
     getmaxyx(stdscr, max_y, max_x);
 
     LoadSyntaxDefs();
     WriteTUI();
-    LoadAndApplyTheme("dark"); // ธีมเริ่มต้น (LoadSession จะโหลดธีมที่เคยตั้งไว้ทับอีกที ถ้ามี)
+    LoadAndApplyTheme("dark"); 
 }
 
 void WriteTUI() {
-    // คำนวณความกว้าง/สูง สำหรับแบ่งพื้นที่ (เผื่อแถวสุดท้าย 1 บรรทัดไว้ให้ StatusBar)
     int leftbar_w = max_x / 20;
     int filemgr_w = max_x / 4;
     int main_w = max_x - leftbar_w - filemgr_w;
@@ -523,12 +509,10 @@ void WriteTUI() {
     ShellWindow       = newwin(shell_h, main_w, editor_h, leftbar_w + filemgr_w);
     StatusBarWindow   = newwin(1, max_x, max_y - 1, 0);
 
-    // กำหนดสี
     init_pair(1, COLOR_RED, COLOR_BLACK);
     init_pair(2, COLOR_GREEN, COLOR_BLACK);
     init_pair(3, COLOR_BLUE, COLOR_BLACK);
 
-    // วาดขอบและชื่อ Window (เนื้อหาจริงจะถูกวาดทับใน RenderAll ทุก loop)
     box(LeftBar, 0, 0);
     mvwprintw(LeftBar, 0, 1, "Menu");
 
@@ -547,14 +531,13 @@ void WriteTUI() {
     wrefresh(ShellWindow);
     wrefresh(StatusBarWindow);
 
-    ApplyThemeToWindows(); // ให้พื้นหลังตรง theme ปัจจุบันทันทีที่สร้าง/สร้างใหม่ (resize)
+    ApplyThemeToWindows(); 
 }
 
 void ClearUP_Program() {
     endwin();
 }
 
-// เรียกเมื่อขนาด terminal เปลี่ยน (จาก KEY_RESIZE หรือ ioctl poll) -> สร้างหน้าต่างใหม่ตามขนาดจริง
 void HandleResize() {
     endwin();
     refresh();
@@ -565,10 +548,9 @@ void HandleResize() {
     delwin(ShellWindow);
     delwin(StatusBarWindow);
     clear();
-    WriteTUI(); // เนื้อหา (CurBuf/FMEntries/Term.outputLines) ยังอยู่ครบ จะถูกวาดใหม่โดย RenderAll() รอบถัดไป
+    WriteTUI(); 
 }
 
-// fallback: บาง terminal/SSH session ไม่ส่ง KEY_RESIZE ให้ ncurses เสมอไป จึง poll ขนาดจริงเทียบของเดิมทุก tick
 void CheckTerminalResizeFallback() {
     struct winsize ws;
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
@@ -654,6 +636,7 @@ void NewLine(EditorBuffer& buf) {
 bool LoadFileIntoBuffer(EditorBuffer& buf, const fs::path& path) {
     ifstream f(path);
     if (!f.is_open()) return false;
+    UndoHistory.clear(); // ล้างประวัติ Undo เมื่อโหลดไฟล์ใหม่
     buf.lines.clear();
     string line;
     while (getline(f, line)) {
@@ -667,8 +650,8 @@ bool LoadFileIntoBuffer(EditorBuffer& buf, const fs::path& path) {
     buf.cursorLine = 0;
     buf.cursorCol = 0;
     buf.topLine = 0;
-    CurrentSyntaxName = DetermineSyntaxForFile(path); // เลือก syntax ตามนามสกุลไฟล์ (ดู syntax/config.json)
-    HLCache.clear();                                  // ไฟล์ใหม่ -> เริ่ม cache highlight ใหม่ทั้งหมด
+    CurrentSyntaxName = DetermineSyntaxForFile(path); 
+    HLCache.clear();                                  
     return true;
 }
 
@@ -681,9 +664,6 @@ bool SaveBufferToFile(EditorBuffer& buf) {
     return true;
 }
 
-// ============================================================
-//  Session persistence (ใช้ nlohmann::json ตามที่ include ไว้เดิม)
-// ============================================================
 void SaveSession() {
     json j;
     j["last_file"] = CurBuf.hasFile ? CurBuf.filepath.string() : "";
@@ -715,9 +695,7 @@ void LoadSession() {
         ShowCursorLine = j.value("show_cursor_line", false);
         string themeName = j.value("theme", string("dark"));
         LoadAndApplyTheme(themeName);
-    } catch (...) {
-        // session file เสีย ไม่เป็นไร ข้ามไป
-    }
+    } catch (...) {}
 }
 
 // ============================================================
@@ -728,28 +706,33 @@ void RefreshFileManager() {
     FMEntries.push_back({"..", true});
     vector<FileEntry> dirs, files;
     try {
+        LastFMWriteTime = fs::last_write_time(CurrentDir); // จำเวลาล่าสุดของโฟลเดอร์
         for (auto& entry : fs::directory_iterator(CurrentDir)) {
             FileEntry fe;
             fe.name = entry.path().filename().string();
             fe.isDir = entry.is_directory();
             if (fe.isDir) dirs.push_back(fe); else files.push_back(fe);
         }
-    } catch (...) {
-        // เข้าโฟลเดอร์ไม่ได้ (สิทธิ์ไม่พอ ฯลฯ)
-    }
+    } catch (...) {}
+    
     sort(dirs.begin(), dirs.end(), [](const FileEntry& a, const FileEntry& b){ return a.name < b.name; });
     sort(files.begin(), files.end(), [](const FileEntry& a, const FileEntry& b){ return a.name < b.name; });
     for (auto& d : dirs) FMEntries.push_back(d);
     for (auto& f : files) FMEntries.push_back(f);
-    FMSelected = 0;
-    FMTop = 0;
+    if(FMSelected >= (int)FMEntries.size()) FMSelected = max(0, (int)FMEntries.size() - 1);
 }
 
-// ============================================================
-//  Terminal: รันคำสั่ง shell แบบ background thread (ไม่ freeze UI)
-// ============================================================
-// escape เครื่องหมาย ' ใน path ก่อนเอาไปประกอบเป็นคำสั่ง shell (ป้องกัน path ที่มี
-// single quote ทำให้ cd พัง เช่น โฟลเดอร์ชื่อ "John's Files")
+void CheckDirectoryChanges() {
+    try {
+        if (fs::exists(CurrentDir)) {
+            auto currentTime = fs::last_write_time(CurrentDir);
+            if (currentTime != LastFMWriteTime) {
+                RefreshFileManager();
+            }
+        }
+    } catch (...) {}
+}
+
 string ShellEscapeSingleQuoted(const string& s) {
     string out;
     for (char c : s) {
@@ -765,7 +748,7 @@ void RunTerminalCommand(const string& cmd) {
         Term.outputLines.push_back("$ " + cmd);
         Term.running = true;
     }
-    fs::path cwd = CurrentDir; // รันคำสั่งในไดเรกทอรีที่ File Manager เปิดอยู่
+    fs::path cwd = CurrentDir; 
     thread([cmd, cwd]() {
         string fullCmd = "cd '" + ShellEscapeSingleQuoted(cwd.string()) + "' && (" + cmd + ") 2>&1";
         FILE* pipe = popen(fullCmd.c_str(), "r");
@@ -835,9 +818,6 @@ void RenderFileManager() {
     wrefresh(FileManagerWindow);
 }
 
-// จำนวนหลักของ n (อย่างน้อย 1 หลัก) ใช้คำนวณความกว้างช่องเลขบรรทัดแบบ dynamic
-// เดิม gutter กว้างคงที่ 4 หลัก ("%4d ") ทำให้ไฟล์ที่มีมากกว่า 9999 บรรทัด เลขบรรทัด
-// ล้นช่องและบิดเบี้ยว (บั๊ก TUI) ตอนนี้คำนวณความกว้างจากจำนวนบรรทัดทั้งหมดของไฟล์แทน
 int DigitCount(int n) {
     if (n < 10) return 1;
     int d = 0;
@@ -862,12 +842,10 @@ void RenderTextEditor() {
     if (CurBuf.cursorLine < CurBuf.topLine) CurBuf.topLine = CurBuf.cursorLine;
     if (CurBuf.cursorLine >= CurBuf.topLine + usableH) CurBuf.topLine = CurBuf.cursorLine - usableH + 1;
 
-    // ความกว้างเลขบรรทัด: อย่างน้อย 4 หลักเหมือนเดิม แต่ขยายอัตโนมัติถ้าไฟล์มีบรรทัด
-    // เยอะกว่านั้น (เช่นไฟล์ 12000 บรรทัด -> 5 หลัก) กันเลขบรรทัดล้น/ทับเนื้อหา
     int lineDigits = max(4, DigitCount((int)CurBuf.lines.size()));
-    int gutterW = ShowLineNumbers ? (lineDigits + 1) : 0; // ":set number" (+1 = ช่องว่างคั่น)
+    int gutterW = ShowLineNumbers ? (lineDigits + 1) : 0; 
 
-    EnsureHighlightValid(CurBuf.topLine + usableH); // เตรียม highlight cache เฉพาะช่วงที่มองเห็น (+กันชนท้ายจอ)
+    EnsureHighlightValid(CurBuf.topLine + usableH); 
 
     for (int i = 0; i < usableH; i++) {
         int lineIdx = CurBuf.topLine + i;
@@ -876,8 +854,6 @@ void RenderTextEditor() {
 
         if (ShowLineNumbers) {
             string numStr = to_string(lineIdx + 1);
-            // เลขบรรทัดของ cursor line ให้เด่นกว่าบรรทัดอื่น (bold) เป็นตัวช่วยมองเห็นตำแหน่ง
-            // cursor ได้ง่ายแม้ตอนที่ยังไม่เปิด :set cursorline
             int numAttr = (lineIdx == CurBuf.cursorLine) ? A_BOLD : 0;
             if (numAttr) wattron(TextEditorWindow, numAttr);
             mvwprintw(TextEditorWindow, i + 1, 1, "%*s ", lineDigits, numStr.c_str());
@@ -888,8 +864,6 @@ void RenderTextEditor() {
         int extraAttr = isCursorLine ? A_REVERSE : 0;
 
         if (isCursorLine) {
-            // ไฮไลต์พื้นหลังทั้งบรรทัดของ cursor ก่อน (รวมพื้นที่ว่างท้ายบรรทัดด้วย)
-            // เหมือน :set cursorline ของ vim/nvim ช่วยให้เห็นตำแหน่งบรรทัดปัจจุบันชัดเจน
             mvwchgat(TextEditorWindow, i + 1, 1 + gutterW, maxChars, A_REVERSE, 0, NULL);
         }
 
@@ -904,13 +878,12 @@ void RenderTextEditor() {
 
     if (CurFocus == FocusPanel::EDITOR) {
         int screenY = CurBuf.cursorLine - CurBuf.topLine + 1;
-        int screenX = 1 + gutterW + CurBuf.cursorCol; // ประมาณ 1 คอลัมน์ต่อ 1 ตัวอักษร utf8
+        int screenX = 1 + gutterW + CurBuf.cursorCol; 
         wmove(TextEditorWindow, screenY, screenX);
     }
     wrefresh(TextEditorWindow);
 }
 
-// ShellWindow ถูกใช้เป็น Terminal panel จริง (คำสั่ง shell รันจริง ผ่าน RunTerminalCommand)
 void RenderTerminalWindow() {
     werase(ShellWindow);
     box(ShellWindow, 0, 0);
@@ -921,8 +894,8 @@ void RenderTerminalWindow() {
     int h, w;
     getmaxyx(ShellWindow, h, w);
     if (h < 4) { wrefresh(ShellWindow); return; }
-    int usableH = h - 3;     // แถวสำหรับ scrollback
-    int promptRow = h - 2;   // แถวสำหรับพิมพ์คำสั่ง
+    int usableH = h - 3;     
+    int promptRow = h - 2;   
 
     {
         lock_guard<mutex> lock(TermMutex);
@@ -964,7 +937,7 @@ void RenderStatusBar(const string& statusMsg) {
 
     string left;
     if (CurMode == EditorMode::COMMAND) {
-        left = CmdLineInput; // แสดง ":cmd" ที่กำลังพิมพ์ทับแถบสถานะ เหมือน vim/nvim
+        left = CmdLineInput; 
     } else {
         left = "-- " + modeStr + " -- | Focus: " + focusStr +
                " | Ln " + to_string(CurBuf.cursorLine + 1) + ", Col " + to_string(CurBuf.cursorCol + 1) +
@@ -994,10 +967,6 @@ void RenderAll(const string& statusMsg) {
     wrefresh(focusedWin);
 }
 
-// ============================================================
-//  ระบบคำสั่งแบบ nvim (command registry) — ":command args..."
-//  เพิ่มคำสั่งใหม่ได้ง่ายๆ โดยเพิ่ม Commands["ชื่อคำสั่ง"] = lambda ใน RegisterCommands()
-// ============================================================
 map<string, function<void(vector<string>&, string&)>> Commands;
 
 string FocusName(FocusPanel f) {
@@ -1016,6 +985,10 @@ void CycleFocus() {
 }
 
 void RegisterCommands() {
+    Commands["hello"] = [](vector<string>& args, string& statusMsg) {
+        statusMsg = "Hello from ThaiVim";
+        LoadSession();
+    };
     Commands["w"] = [](vector<string>& args, string& statusMsg) {
         if (!args.empty()) { CurBuf.filepath = args[0]; CurBuf.hasFile = true; }
         if (SaveBufferToFile(CurBuf)) statusMsg = "File saved: " + CurBuf.filepath.string();
@@ -1054,11 +1027,10 @@ void RegisterCommands() {
         else statusMsg = "ไม่รู้จักตัวเลือก: " + args[0];
     };
     Commands["help"] = [](vector<string>&, string& statusMsg) {
-        statusMsg = ":w :q :q! :wq/:x :e<path> :NN(บรรทัด) :!cmd :term :set number/nonumber :set cursorline/nocursorline :set theme <dark|light|custom>";
+        statusMsg = ":w :q :q! :wq/:x :e<path> :NN(บรรทัด) :!cmd :term :set number/nonumber :set cursorline/nocursorline :set theme <dark|light|custom> | Ctrl+S save, Ctrl+Q quit, Ctrl+O open, Ctrl+N new, Ctrl+W close";
     };
 }
 
-// รองรับ ":!cmd" (รันคำสั่ง shell ทันที) และ ":42" (กระโดดไปบรรทัด 42) นอกเหนือจาก command registry
 void ParseAndExecuteCommand(const string& rawCmd, string& statusMsg) {
     if (rawCmd.empty()) return;
 
@@ -1074,9 +1046,6 @@ void ParseAndExecuteCommand(const string& rawCmd, string& statusMsg) {
 
     bool allDigits = all_of(rawCmd.begin(), rawCmd.end(), [](unsigned char c){ return isdigit(c); });
     if (allDigits) {
-        // บั๊กเดิม: stoi() throw std::out_of_range ถ้าผู้ใช้พิมพ์ ":999999999999999" (เกินช่วง int)
-        // แล้วไม่มีใครดัก exception นี้ใน UI thread (main_thread ไม่มี try/catch) ทำให้ทั้งโปรแกรม
-        // เรียก std::terminate() และ crash ทันที ตอนนี้ดักไว้แล้วแค่แสดง status message แทน
         try {
             long parsed = stol(rawCmd);
             int ln = (int)parsed - 1;
@@ -1110,14 +1079,14 @@ void ParseAndExecuteCommand(const string& rawCmd, string& statusMsg) {
 //  Key handling
 // ============================================================
 void HandleInsertKey(int ch, string& statusMsg) {
-    if (ch == 27) { // ESC
+    if (ch == 27) { 
         CurMode = EditorMode::NORMAL;
         if (CurBuf.cursorCol > 0) CurBuf.cursorCol--;
         statusMsg = "-- NORMAL --";
         return;
     }
     if (ch == KEY_BACKSPACE || ch == 127 || ch == 8) { BackspaceAtCursor(CurBuf); return; }
-    if (ch == '\n' || ch == KEY_ENTER || ch == 13) { NewLine(CurBuf); return; }
+    if (ch == '\n' || ch == KEY_ENTER || ch == 13) { SaveUndo(); NewLine(CurBuf); return; }
     if (ch == KEY_LEFT) { if (CurBuf.cursorCol > 0) CurBuf.cursorCol--; return; }
     if (ch == KEY_RIGHT) {
         int len = (int)Utf8Split(CurBuf.lines[CurBuf.cursorLine]).size();
@@ -1127,9 +1096,16 @@ void HandleInsertKey(int ch, string& statusMsg) {
     if (ch == KEY_UP) { MoveCursorUp(CurBuf); return; }
     if (ch == KEY_DOWN) { MoveCursorDown(CurBuf); return; }
     if (ch == KEY_RESIZE || ch == ERR) return;
-    if (ch < 32) return; // ignore ปุ่มควบคุมอื่นๆ
+    
+    // Tab ใน INSERT mode จะทำการเติม Space (Soft-Tab) เพื่อให้ง่ายแบบ VS Code
+    if (ch == '\t') {
+        SaveUndo();
+        for (int i = 0; i < 4; i++) InsertCharAtCursor(CurBuf, " ");
+        return;
+    }
+    if (ch < 32) return; 
 
-    string utf8char = ReadUtf8Char(ch); // รองรับอักขระไทย (multi-byte)
+    string utf8char = ReadUtf8Char(ch); 
     InsertCharAtCursor(CurBuf, utf8char);
 }
 
@@ -1150,7 +1126,7 @@ void HandleCommandKey(int ch, string& statusMsg) {
         else { CurMode = EditorMode::NORMAL; CmdLineInput = ""; }
         return;
     }
-    if (ch == KEY_UP) { // ย้อนดูคำสั่งก่อนหน้า เหมือน nvim
+    if (ch == KEY_UP) { 
         if (!CmdHistory.empty() && CmdHistoryPos < (int)CmdHistory.size() - 1) {
             CmdHistoryPos++;
             CmdLineInput = ":" + CmdHistory[CmdHistory.size() - 1 - CmdHistoryPos];
@@ -1173,6 +1149,7 @@ void HandleNormalKey(int ch, string& statusMsg) {
         char p = PendingKey;
         PendingKey = 0;
         if (p == 'd' && ch == 'd') {
+            SaveUndo();
             CurBuf.clipboard = { CurBuf.lines[CurBuf.cursorLine] };
             if (CurBuf.lines.size() > 1) {
                 CurBuf.lines.erase(CurBuf.lines.begin() + CurBuf.cursorLine);
@@ -1190,10 +1167,6 @@ void HandleNormalKey(int ch, string& statusMsg) {
             CurBuf.cursorLine = 0;
             CurBuf.cursorCol = 0;
         } else {
-            // บั๊กเดิม: ถ้ากด 'd'/'y'/'g' ค้างไว้เป็น pending แล้วกดปุ่มอื่นที่ไม่ตรง (เช่น d
-            // แล้วตามด้วย j) ปุ่มที่สองจะถูก "กลืน" หายไปเฉยๆ ไม่ทำอะไรเลย (เดิม return ตรงนี้ทันที)
-            // ตอนนี้ให้ประมวลผลปุ่มที่สองต่อแบบปกติเหมือนไม่มี pending มาก่อน (เช่น d แล้ว j
-            // จะไม่ลบอะไร แต่ cursor จะเลื่อนลงตามที่ควรจะเป็น)
             HandleNormalKey(ch, statusMsg);
             return;
         }
@@ -1212,22 +1185,25 @@ void HandleNormalKey(int ch, string& statusMsg) {
         case 'g': PendingKey = 'g'; break;
         case 'd': PendingKey = 'd'; break;
         case 'y': PendingKey = 'y'; break;
-        case 'i': CurMode = EditorMode::INSERT; statusMsg = "-- INSERT --"; break;
-        case 'a': if (lineLen > 0) CurBuf.cursorCol++; CurMode = EditorMode::INSERT; statusMsg = "-- INSERT --"; break;
-        case 'A': CurBuf.cursorCol = lineLen; CurMode = EditorMode::INSERT; statusMsg = "-- INSERT --"; break;
-        case 'I': CurBuf.cursorCol = 0; CurMode = EditorMode::INSERT; statusMsg = "-- INSERT --"; break;
+        case 'i': SaveUndo(); CurMode = EditorMode::INSERT; statusMsg = "-- INSERT --"; break;
+        case 'a': SaveUndo(); if (lineLen > 0) CurBuf.cursorCol++; CurMode = EditorMode::INSERT; statusMsg = "-- INSERT --"; break;
+        case 'A': SaveUndo(); CurBuf.cursorCol = lineLen; CurMode = EditorMode::INSERT; statusMsg = "-- INSERT --"; break;
+        case 'I': SaveUndo(); CurBuf.cursorCol = 0; CurMode = EditorMode::INSERT; statusMsg = "-- INSERT --"; break;
         case 'o':
+            SaveUndo();
             CurBuf.lines.insert(CurBuf.lines.begin() + CurBuf.cursorLine + 1, "");
             CurBuf.cursorLine++; CurBuf.cursorCol = 0;
             CurMode = EditorMode::INSERT; statusMsg = "-- INSERT --";
             break;
         case 'O':
+            SaveUndo();
             CurBuf.lines.insert(CurBuf.lines.begin() + CurBuf.cursorLine, "");
             CurBuf.cursorCol = 0;
             CurMode = EditorMode::INSERT; statusMsg = "-- INSERT --";
             break;
-        case 'x': DeleteCharAtCursor(CurBuf); break;
+        case 'x': SaveUndo(); DeleteCharAtCursor(CurBuf); break;
         case 'p':
+            SaveUndo();
             if (!CurBuf.clipboard.empty()) {
                 CurBuf.lines.insert(CurBuf.lines.begin() + CurBuf.cursorLine + 1, CurBuf.clipboard[0]);
                 CurBuf.cursorLine++;
@@ -1235,6 +1211,7 @@ void HandleNormalKey(int ch, string& statusMsg) {
             }
             break;
         case 'P':
+            SaveUndo();
             if (!CurBuf.clipboard.empty()) {
                 CurBuf.lines.insert(CurBuf.lines.begin() + CurBuf.cursorLine, CurBuf.clipboard[0]);
                 CurBuf.modified = true;
@@ -1242,6 +1219,33 @@ void HandleNormalKey(int ch, string& statusMsg) {
             break;
         case ':': CurMode = EditorMode::COMMAND; CmdLineInput = ":"; break;
         case '\t': CycleFocus(); statusMsg = "Focus: " + FocusName(CurFocus); break;
+        // --- Windows/VS Code Copy & Paste keys in Normal Mode ---
+        case 3: // Ctrl + C
+            CurBuf.clipboard = { CurBuf.lines[CurBuf.cursorLine] };
+            statusMsg = "Line copied (Ctrl+C)";
+            break;
+        case 22: // Ctrl + V
+            SaveUndo();
+            if (!CurBuf.clipboard.empty()) {
+                CurBuf.lines.insert(CurBuf.lines.begin() + CurBuf.cursorLine + 1, CurBuf.clipboard[0]);
+                CurBuf.cursorLine++;
+                CurBuf.modified = true;
+                statusMsg = "Pasted (Ctrl+V)";
+            }
+            break;
+        case 24: // Ctrl + X
+            SaveUndo();
+            CurBuf.clipboard = { CurBuf.lines[CurBuf.cursorLine] };
+            if (CurBuf.lines.size() > 1) {
+                CurBuf.lines.erase(CurBuf.lines.begin() + CurBuf.cursorLine);
+                if (CurBuf.cursorLine >= (int)CurBuf.lines.size()) CurBuf.cursorLine = (int)CurBuf.lines.size() - 1;
+            } else {
+                CurBuf.lines[0] = "";
+            }
+            CurBuf.cursorCol = 0;
+            CurBuf.modified = true;
+            statusMsg = "Cut (Ctrl+X)";
+            break;
         default: break;
     }
     ClampCursorCol(CurBuf);
@@ -1252,6 +1256,7 @@ void HandleFileManagerKey(int ch, string& statusMsg) {
     switch (ch) {
         case 'j': case KEY_DOWN: if (FMSelected < (int)FMEntries.size() - 1) FMSelected++; break;
         case 'k': case KEY_UP:   if (FMSelected > 0) FMSelected--; break;
+        case 'r': RefreshFileManager(); statusMsg = "File Manager Refreshed"; break; // Manual Refresh
         case '\n': case KEY_ENTER: case 13: {
             if (FMEntries.empty()) break;
             auto& sel = FMEntries[FMSelected];
@@ -1311,12 +1316,33 @@ void HandleTerminalKey(int ch, string& statusMsg) {
     if (ch == KEY_PPAGE) { Term.scrollOffset += 5; return; }
     if (ch == KEY_NPAGE) { Term.scrollOffset = max(0, Term.scrollOffset - 5); return; }
     if (ch < 32) return;
-    Term.inputLine += ReadUtf8Char(ch); // เผื่อกรณีพิมพ์ path/ชื่อไฟล์ภาษาไทย
+    Term.inputLine += ReadUtf8Char(ch); 
 }
 
 void HandleKey(int ch, string& statusMsg) {
-    if (ch == ERR) return;       // timeout tick เฉยๆ ไม่มีปุ่มกด
+    if (ch == ERR) return;       
     if (ch == KEY_RESIZE) { HandleResize(); return; }
+
+    // --- Global VS Code / Windows Keybindings ---
+    if (ch == 19) { ParseAndExecuteCommand("w", statusMsg); return; } // Ctrl + S (Save)
+    if (ch == 17) { ParseAndExecuteCommand("q", statusMsg); return; } // Ctrl + Q (Quit)
+    if (ch == 16) { CurMode = EditorMode::COMMAND; CmdLineInput = ":"; statusMsg = "Command Palette (Ctrl+P)"; return; } // Ctrl + P (Command)
+    if (ch == 2)  { CurFocus = (CurFocus == FocusPanel::FILEMANAGER) ? FocusPanel::EDITOR : FocusPanel::FILEMANAGER; statusMsg = "Focus: " + FocusName(CurFocus); return; } // Ctrl + B (Toggle Sidebar)
+    if (ch == 26 && CurMode != EditorMode::INSERT) { // Ctrl + Z (Undo) ในโหมด Normal
+        if (!UndoHistory.empty()) {
+            auto snap = UndoHistory.back();
+            UndoHistory.pop_back();
+            CurBuf.lines = snap.lines;
+            CurBuf.cursorLine = snap.cursorLine;
+            CurBuf.cursorCol = snap.cursorCol;
+            CurBuf.modified = true;
+            statusMsg = "Undo (Ctrl+Z)";
+        } else {
+            statusMsg = "Nothing to undo";
+        }
+        return;
+    }
+
     if (CurFocus == FocusPanel::FILEMANAGER) { HandleFileManagerKey(ch, statusMsg); return; }
     if (CurFocus == FocusPanel::TERMINAL) { HandleTerminalKey(ch, statusMsg); return; }
     switch (CurMode) {
@@ -1330,13 +1356,12 @@ void HandleKey(int ch, string& statusMsg) {
 //  Threads
 // ============================================================
 void FileManager_thread() {
-    // สำรองไว้สำหรับงานพื้นหลังของ File Manager ในอนาคต (เช่น watch การเปลี่ยนแปลงไฟล์)
 }
 
 void main_thread() {
     SetupTerminal();
     RegisterCommands();
-    CurrentDir = StartCwd; // ล็อก File Manager ให้เปิดที่ path ปัจจุบันซึ่ง user รันคำสั่ง thaivim อยู่ (ไม่ใช่ path ของตัวโปรแกรม)
+    CurrentDir = StartCwd; 
     RefreshFileManager();
 
     string statusMsg = "Welcome to ThaiVim! Use :help for commands, Tab to switch panels";
@@ -1345,9 +1370,12 @@ void main_thread() {
     RenderAll(statusMsg);
 
     while (MainRunning) {
-        int ch = getch(); // timeout(50) ทำให้ค่านี้เป็น ERR ได้ถ้าไม่มีการกดปุ่มภายใน 50ms
+        int ch = getch(); 
         HandleKey(ch, statusMsg);
-        CheckTerminalResizeFallback(); // เผื่อ terminal ไม่ส่ง KEY_RESIZE (เช่นบาง SSH client)
+        
+        CheckDirectoryChanges(); // เช็ค Auto Refresh File Manager ทันทีใน Loop 
+        CheckTerminalResizeFallback(); 
+        
         if (!MainRunning) break;
         RenderAll(statusMsg);
     }
@@ -1362,16 +1390,12 @@ void main_thread() {
 }
 
 int main(int argc,char* args[]) {
-    setlocale(LC_ALL, ""); // จำเป็นมากสำหรับให้ ncursesw แสดงผลภาษาไทย (UTF-8) ได้ถูกต้อง
+    setlocale(LC_ALL, ""); 
 
-    // เก็บ path ปัจจุบันที่ user อยู่ตอนสั่งรัน thaivim ไว้ก่อน (ต้องทำเป็นอันดับแรกสุด
-    // ก่อนโค้ดส่วนอื่นจะไปยุ่งกับ filesystem) เพื่อให้ File Manager ล็อกไปเปิดที่ path นี้
-    // แทนที่จะเปิดตามตำแหน่งไฟล์ executable เหมือนเดิม (MotherPath ยังคงไว้ใช้หา
-    // syntax/, themes/ และไฟล์ session ที่อยู่คู่กับตัวโปรแกรมเท่านั้น)
     try {
         StartCwd = fs::current_path();
     } catch (...) {
-        StartCwd = fs::path("."); // เผื่อ getcwd ล้มเหลว (เช่นโฟลเดอร์ถูกลบระหว่างรันอยู่)
+        StartCwd = fs::path("."); 
     }
 
     MotherPath = fs::absolute(fs::canonical(args[0])).parent_path().parent_path();
@@ -1393,9 +1417,8 @@ int main(int argc,char* args[]) {
             }
             if (has) {
                 if (node.action == "QUIT") MainRunning = false;
-                // TODO: รองรับ action อื่นๆ ที่ส่งมาจาก thread อื่นได้ที่นี่
             } else {
-                this_thread::sleep_for(chrono::milliseconds(20)); // กัน busy-loop กิน CPU 100%
+                this_thread::sleep_for(chrono::milliseconds(20)); 
             }
         }
         catch (const std::exception& e) {
