@@ -1,0 +1,17 @@
+{
+  "name": "python",
+  "line_comment": "#",
+  "block_comment_start": "",
+  "block_comment_end": "",
+  "string_delimiters": ["\"", "'"],
+  "preprocessor": false,
+  "numbers": true,
+  "keywords": [
+    "def", "class", "if", "elif", "else", "for", "while", "return", "import",
+    "from", "as", "try", "except", "finally", "with", "pass", "break",
+    "continue", "lambda", "yield", "global", "nonlocal", "assert", "del",
+    "raise", "in", "is", "not", "and", "or", "None", "True", "False", "async",
+    "await"
+  ],
+  "types": ["int", "float", "str", "bool", "list", "dict", "set", "tuple", "bytes"]
+}

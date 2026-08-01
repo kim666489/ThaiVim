@@ -1,0 +1,11 @@
+{
+  "name": "json",
+  "line_comment": "",
+  "block_comment_start": "",
+  "block_comment_end": "",
+  "string_delimiters": ["\""],
+  "preprocessor": false,
+  "numbers": true,
+  "keywords": ["true", "false", "null"],
+  "types": []
+}

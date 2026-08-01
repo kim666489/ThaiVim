@@ -1,0 +1,13 @@
+{
+  "name": "custom",
+  "colors": {
+    "background": "black",
+    "foreground": "white",
+    "keyword": "magenta",
+    "type": "yellow",
+    "string": "green",
+    "comment": "cyan",
+    "number": "red",
+    "preprocessor": "blue"
+  }
+}

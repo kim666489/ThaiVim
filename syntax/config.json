@@ -1,0 +1,15 @@
+{
+  "extensions": {
+    ".c": "cpp",
+    ".h": "cpp",
+    ".cpp": "cpp",
+    ".hpp": "cpp",
+    ".cc": "cpp",
+    ".cxx": "cpp",
+    ".py": "python",
+    ".json": "json",
+    ".md": "markdown",
+    ".sh": "bash",
+    ".bash": "bash"
+  }
+}

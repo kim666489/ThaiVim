@@ -1,0 +1,15 @@
+{
+  "name": "bash",
+  "line_comment": "#",
+  "block_comment_start": "",
+  "block_comment_end": "",
+  "string_delimiters": ["\"", "'"],
+  "preprocessor": false,
+  "numbers": false,
+  "keywords": [
+    "if", "then", "else", "elif", "fi", "for", "while", "do", "done", "case",
+    "esac", "function", "return", "exit", "echo", "export", "local", "in",
+    "select", "until"
+  ],
+  "types": []
+}

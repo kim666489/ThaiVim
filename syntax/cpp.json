@@ -1,0 +1,23 @@
+{
+  "name": "cpp",
+  "line_comment": "//",
+  "block_comment_start": "/*",
+  "block_comment_end": "*/",
+  "string_delimiters": ["\"", "'"],
+  "preprocessor": true,
+  "numbers": true,
+  "keywords": [
+    "if", "else", "for", "while", "do", "switch", "case", "default", "break",
+    "continue", "return", "class", "struct", "namespace", "using", "template",
+    "typename", "const", "static", "void", "auto", "public", "private",
+    "protected", "virtual", "new", "delete", "try", "catch", "throw", "enum",
+    "union", "this", "sizeof", "operator", "friend", "explicit", "inline",
+    "mutable", "volatile", "true", "false", "nullptr", "constexpr", "override",
+    "final", "noexcept", "goto"
+  ],
+  "types": [
+    "int", "float", "double", "char", "bool", "long", "short", "unsigned",
+    "signed", "string", "vector", "map", "set", "queue", "pair", "size_t",
+    "wstring", "fs", "json", "thread", "mutex"
+  ]
+}

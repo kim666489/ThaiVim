@@ -1,0 +1,13 @@
+{
+  "name": "light",
+  "colors": {
+    "background": "white",
+    "foreground": "black",
+    "keyword": "blue",
+    "type": "cyan",
+    "string": "green",
+    "comment": "black",
+    "number": "magenta",
+    "preprocessor": "red"
+  }
+}

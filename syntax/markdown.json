@@ -1,0 +1,11 @@
+{
+  "name": "markdown",
+  "line_comment": "",
+  "block_comment_start": "<!--",
+  "block_comment_end": "-->",
+  "string_delimiters": [],
+  "preprocessor": false,
+  "numbers": false,
+  "keywords": [],
+  "types": []
+}
