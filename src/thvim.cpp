@@ -989,6 +989,48 @@ void RegisterCommands() {
         statusMsg = "Hello from ThaiVim";
         LoadSession();
     };
+    Commands["say"] = [](vector<string>& args, string& statusMsg) {
+        if (args.size() != 0) {
+            statusMsg = args[0];
+        }
+    };
+    Commands["setup"] = [](vector<string>& args,string& statusMsg){
+        if (args.size() != 0) {
+            if (args[0] == "compile") {
+                fs::path ExePath = fs::current_path();
+
+                fs::create_directories(ExePath / "src");
+                fs::create_directories(ExePath / "bin");
+                fs::create_directories(ExePath / "config");
+                fs::create_directories(ExePath / "test");
+
+                fs::create_directories(ExePath / "src" / "include");
+                fs::path makefilePath = ExePath / "makefile";
+                if (!fs::exists(makefilePath)) {
+                    std::ofstream(makefilePath);
+                }
+
+                statusMsg = "Project folders for 'compile' mode created successfully!";
+
+            } else if (args[0] == "interpreter") {
+                fs::path ExePath = fs::current_path();
+
+                fs::create_directories(ExePath / "scripts");
+                fs::create_directories(ExePath / "modules");
+
+                fs::path makefilePath = ExePath / "makefile";
+                if (!fs::exists(makefilePath)) {
+                    std::ofstream(makefilePath);
+                }
+
+                statusMsg = "Project folders for 'interpreter' mode created successfully!";
+            } else {
+                statusMsg = "The setup command does not include the " + args[0] + " mode you require.";
+            }
+        } else {
+            statusMsg = "You have not yet specified the mode for setting up your project.";
+        }
+    };
     Commands["w"] = [](vector<string>& args, string& statusMsg) {
         if (!args.empty()) { CurBuf.filepath = args[0]; CurBuf.hasFile = true; }
         if (SaveBufferToFile(CurBuf)) statusMsg = "File saved: " + CurBuf.filepath.string();
